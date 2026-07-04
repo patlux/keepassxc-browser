@@ -615,9 +615,36 @@ keepass.requestAutotype = async function(tab, args = []) {
     }
 };
 
+// Triggers the unlock dialog for a locked database and waits until the user
+// has unlocked it (or the timeout is reached), then retries the association.
+keepass.passkeysEnsureUnlocked = async function(tab, timeoutMs) {
+    const taResponse = await keepass.testAssociation(tab, [ false, true ]);
+    if (taResponse || !keepass.isKeePassXCAvailable || !keepass.isDatabaseClosed) {
+        return taResponse;
+    }
+
+    // Unlock dialog has been triggered. Wait for the database to be unlocked.
+    const pollInterval = 250;
+    let waited = 0;
+    while (waited < timeoutMs) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        waited += pollInterval;
+
+        if (!keepass.isKeePassXCAvailable) {
+            return false;
+        }
+
+        if (!keepass.isDatabaseClosed) {
+            return await keepass.testAssociation(tab, [ false ]);
+        }
+    }
+
+    return false;
+};
+
 keepass.passkeysRegister = async function(tab, args = []) {
     try {
-        const taResponse = await keepass.testAssociation(tab, [ false ]);
+        const taResponse = await keepass.passkeysEnsureUnlocked(tab, args[0]?.timeout || 120000);
         if (!taResponse || !keepass.isConnected || args.length < 2) {
             browserAction.showDefault(tab);
             return [];
@@ -653,7 +680,7 @@ keepass.passkeysRegister = async function(tab, args = []) {
 
 keepass.passkeysGet = async function(tab, args = []) {
     try {
-        const taResponse = await keepass.testAssociation(tab, [ false ]);
+        const taResponse = await keepass.passkeysEnsureUnlocked(tab, args[0]?.timeout || 120000);
         if (!taResponse || !keepass.isConnected || args.length < 2) {
             browserAction.showDefault(tab);
             return [];
