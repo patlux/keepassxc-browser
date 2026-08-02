@@ -34,6 +34,7 @@ class UsernameFieldIcon extends Icon {
     }
 
     switchIcon(state) {
+        this.databaseState = state;
         if (!this.icon) {
             return;
         } else {
@@ -137,6 +138,7 @@ const iconClicked = async function(field, icon) {
     }
 
     if (icon.className.includes('unlock')) {
+        await kpxc.receiveCredentialsIfNecessary();
         fillCredentials(field);
     }
 };

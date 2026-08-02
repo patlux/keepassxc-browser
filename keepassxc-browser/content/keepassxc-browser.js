@@ -112,31 +112,37 @@ kpxc.createCombination = async function(activeElement, passOnly) {
 
 // Switch credentials if database is changed or closed
 kpxc.detectDatabaseChange = async function(response) {
-    kpxc.databaseState = DatabaseState.LOCKED;
     kpxc.clearAllFromPage();
-    kpxcIcons.switchIcons();
 
-    if (document.visibilityState !== 'hidden') {
-        if (response.hash.new !== '') {
-            _called.retrieveCredentials = false;
-            const settings = await sendMessage('load_settings');
-            kpxc.settings = settings;
-            kpxc.databaseState = DatabaseState.UNLOCKED;
+    if (response.hash.new !== '') {
+        kpxc.databaseState = DatabaseState.UNLOCKED;
+    } else if (!response.connected) {
+        kpxc.databaseState = DatabaseState.DISCONNECTED;
+    } else {
+        kpxc.databaseState = DatabaseState.LOCKED;
+    }
+    await kpxcIcons.switchIcons();
 
-            await kpxc.initCredentialFields();
-            kpxcIcons.switchIcons();
+    // Keep hidden tabs free of credentials, but retain the actual database state.
+    // Otherwise a tab can remain visually locked after the database was unlocked
+    // while another tab or browser window was active.
+    if (document.visibilityState === 'hidden' || kpxc.databaseState !== DatabaseState.UNLOCKED) {
+        return;
+    }
 
-            // If user has requested a manual fill through context menu the actual credential filling
-            // is handled here when the opened database has been regognized. It's not a pretty hack.
-            const manualFill = await sendMessage('page_get_manual_fill');
-            if (manualFill !== ManualFill.NONE && kpxc.combinations.length > 0) {
-                await kpxcFill.fillInFromActiveElement(manualFill === ManualFill.PASSWORD);
-                await sendMessage('page_set_manual_fill', ManualFill.NONE);
-            }
-        } else if (!response.connected) {
-            kpxc.databaseState = DatabaseState.DISCONNECTED;
-            kpxcIcons.switchIcons();
-        }
+    _called.retrieveCredentials = false;
+    const settings = await sendMessage('load_settings');
+    kpxc.settings = settings;
+
+    await kpxc.initCredentialFields();
+    await kpxcIcons.switchIcons();
+
+    // If user has requested a manual fill through context menu the actual credential filling
+    // is handled here when the opened database has been recognized. It's not a pretty hack.
+    const manualFill = await sendMessage('page_get_manual_fill');
+    if (manualFill !== ManualFill.NONE && kpxc.combinations.length > 0) {
+        await kpxcFill.fillInFromActiveElement(manualFill === ManualFill.PASSWORD);
+        await sendMessage('page_set_manual_fill', ManualFill.NONE);
     }
 };
 
@@ -898,6 +904,15 @@ if (document.readyState === 'complete' || (document.readyState !== 'loading' && 
     document.addEventListener('DOMContentLoaded', initContentScript);
 }
 
+// Browser window focus changes do not necessarily emit tabs.onActivated when
+// the same tab stays selected. Refresh stale lock/credential state when the
+// document becomes visible again.
+document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible') {
+        await kpxc.triggerActivatedTab();
+    }
+});
+
 // These are executed in each frame
 browser.runtime.onMessage.addListener(async function(req, sender) {
     if ('action' in req) {
@@ -957,9 +972,11 @@ browser.runtime.onMessage.addListener(async function(req, sender) {
         } else if (req.action === 'redetect_fields') {
             const response = await sendMessage('load_settings');
             kpxc.settings = response;
+            await kpxc.updateDatabaseState();
             kpxc.inputs = [];
             kpxc.combinations = [];
-            kpxc.initCredentialFields();
+            await kpxc.initCredentialFields();
+            await kpxcIcons.switchIcons();
         } else if (req.action === 'reload_extension') {
             sendMessage('reconnect');
         } else if (req.action === 'reopen_database') {
@@ -970,7 +987,9 @@ browser.runtime.onMessage.addListener(async function(req, sender) {
         } else if (req.action === 'save_credentials') {
             kpxc.rememberCredentialsFromContextMenu();
         } else if (req.action === 'retrieve_credentials_forced') {
+            await kpxc.updateDatabaseState();
             await kpxc.retrieveCredentials(true);
+            await kpxcIcons.switchIcons();
         } else if (req.action === 'show_password_generator') {
             kpxcPasswordGenerator.showPasswordGenerator();
         } else if (req.action === 'request_autotype') {
@@ -994,6 +1013,11 @@ kpxc.reconnect = async function() {
             return false;
         }
     }
+
+    // Background and content scripts can disagree after an unlock happened in
+    // another tab/window. Every user-initiated action must self-heal that state.
+    await kpxc.updateDatabaseState();
+    await kpxcIcons.switchIcons();
     return true;
 };
 

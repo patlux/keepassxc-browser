@@ -54,6 +54,7 @@ class Icon {
     }
 
     switchIcon(state, uuid) {
+        this.databaseState = state;
         if (!this.icon) {
             return;
         }
